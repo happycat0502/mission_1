@@ -12,10 +12,10 @@
 
 // LED Output pins
 #define ONOFF_LED_PIN 7        // Digital ON/OFF LED
-#define BRIGHTNESS_LED_PIN 9   // PWM pin for brightness control
-#define RGB_RED_PIN 11         // PWM pin for red component
+#define BRIGHTNESS_LED_PIN 8   // PWM pin for brightness control
+#define RGB_RED_PIN 9         // PWM pin for red component
 #define RGB_GREEN_PIN 10       // PWM pin for green component
-#define RGB_BLUE_PIN 6         // PWM pin for blue component
+#define RGB_BLUE_PIN 11         // PWM pin for blue component
 
 //===========================================
 // PWM SIGNAL VARIABLES
