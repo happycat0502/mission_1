@@ -1,355 +1,283 @@
 #include <Arduino.h>
 #include <TaskScheduler.h>
 #include "PinChangeInterrupt.h"
-//asdfasdfas
-// Pin definitions
-#define ONOFF_LED_PIN 9    // LED for ON/OFF control
-#define PWM_LED_PIN 10     // LED for brightness control
-#define COLOR_LED_PIN 11   // LED for color patterns
 
-#define BUTTON_ONOFF 2     // Button for ON/OFF control
-#define BUTTON_MODE 3      // Button for mode selection
-#define BUTTON_COLOR 4     // Button for color pattern selection
+//===========================================
+// PIN DEFINITIONS
+//===========================================
+// RC Input pins - Best pins for reading PWM signals
+#define RC_CH1_PIN 2    // Steering - Using hardware interrupt INT0
+#define RC_CH2_PIN 3    // Throttle - Using hardware interrupt INT1
+#define RC_CH3_PIN 4    // Aux channel - Using pin change interrupt
 
-#define POTENTIOMETER_PIN A0 // Potentiometer for brightness control
-#define SERIAL_BAUDRATE 9600 // Serial communication speed
+// LED Output pins
+#define ONOFF_LED_PIN 7        // Digital ON/OFF LED
+#define BRIGHTNESS_LED_PIN 9   // PWM pin for brightness control
+#define RGB_RED_PIN 11         // PWM pin for red component
+#define RGB_GREEN_PIN 10       // PWM pin for green component
+#define RGB_BLUE_PIN 6         // PWM pin for blue component
 
-// Mode definitions
-enum Mode {
-    NORMAL,    // Normal mode
-    PWM_MODE,  // PWM control mode
-    COLOR_MODE,// Color pattern mode
-    OFF        // All LEDs off
-};
+//===========================================
+// PWM SIGNAL VARIABLES
+//===========================================
+volatile uint16_t ch1PulseWidth = 1500;  // Default center (1000-2000 μs)
+volatile uint16_t ch2PulseWidth = 1500;  // Default center
+volatile uint16_t ch3PulseWidth = 1500;  // Default center
+volatile uint32_t ch1StartTime = 0;
+volatile uint32_t ch2StartTime = 0;
+volatile uint32_t ch3StartTime = 0;
 
-// Color pattern definitions
-enum ColorPattern {
-    RED,
-    GREEN,
-    BLUE,
-    RAINBOW,
-    STROBE
-};
+// Failsafe variables
+unsigned long lastValidRcSignalTime = 0;
+const unsigned long rcSignalTimeout = 500; // ms
 
-// Global variables
-Mode currentMode = NORMAL;            // Current mode initialization
-int brightness = 255;                 // Brightness initialization (full)
-ColorPattern currentColorPattern = RED;// Current color pattern
-unsigned long colorDuration = 1000;    // Color change duration
-unsigned long strobeDuration = 100;    // Strobe effect duration
+//===========================================
+// LED CONTROL VARIABLES
+//===========================================
+bool ledState = false;         // ON/OFF state
+int ledBrightness = 0;         // Brightness level (0-255)
+int rgbHue = 0;                // Color hue (0-359)
 
-// LED current values
-int onOffLedValue = 0;                 // Current ON/OFF LED value
-int pwmLedValue = 0;                   // Current PWM LED value
-int colorLedValue = 0;                 // Current color LED value
-int colorIntensity = 0;                // Current color intensity
-
-// Button state variables
-volatile bool onOffButtonPressed = false;  // ON/OFF button press flag
-volatile bool modeButtonPressed = false;   // Mode button press flag
-volatile bool colorButtonPressed = false;  // Color button press flag
-
-// Function declarations
-void normalSequence();     // Normal mode sequence
-void pwmSequence();        // PWM mode sequence
-void colorSequence();      // Color pattern sequence
-void checkButtons();       // Button check function
-void readPotentiometer();  // Read potentiometer value
-void processSerial();      // Process serial input
-void updateLEDs();         // Update LEDs
-
-// Interrupt Service Routines
-void onOffISR() {
-    onOffButtonPressed = true;
-}
-void modeISR() {
-    modeButtonPressed = true;
-}
-void colorISR() {
-    colorButtonPressed = true;
-}
-
-// TaskScheduler object creation
+//===========================================
+// TASK SCHEDULER
+//===========================================
 Scheduler runner;
 
-// Task objects creation
-Task tNormal(colorDuration, TASK_FOREVER, &normalSequence, &runner, false);
-Task tPWM(50, TASK_FOREVER, &pwmSequence, &runner, false);
-Task tColor(colorDuration, TASK_FOREVER, &colorSequence, &runner, false);
+// Function prototypes
+void updateLEDs();
+void printDebugInfo();
+void checkSignalStatus();
+void setRgbColorFromHue(int hue);
 
-Task tButtons(20, TASK_FOREVER, &checkButtons, &runner, true);
-Task tPotentiometer(20, TASK_FOREVER, &readPotentiometer, &runner, true);
-Task tSerial(20, TASK_FOREVER, &processSerial, &runner, true);
-Task tUpdateLEDs(20, TASK_FOREVER, &updateLEDs, &runner, true);
-
-// LED values setting function (internal state only)
-void setLEDValues(int onOff, int pwm, int color) {
-    onOffLedValue = onOff;
-    pwmLedValue = pwm;
-    colorLedValue = color;
+//===========================================
+// INTERRUPT HANDLERS
+//===========================================
+// Interrupt handler for channel 1 (steering)
+void ch1Change() {
+  if (digitalRead(RC_CH1_PIN) == HIGH) {
+    // Rising edge
+    ch1StartTime = micros();
+  } else {
+    // Falling edge
+    uint32_t pulseWidth = micros() - ch1StartTime;
+    
+    // Only update if within valid range (filter glitches)
+    if (pulseWidth >= 900 && pulseWidth <= 2100) {
+      ch1PulseWidth = pulseWidth;
+      lastValidRcSignalTime = millis();
+    }
+  }
 }
 
-// Update LEDs function (actual hardware control)
-void updateLEDs() {
-    // Apply brightness to LEDs
-    analogWrite(ONOFF_LED_PIN, onOffLedValue);
-    analogWrite(PWM_LED_PIN, pwmLedValue * brightness / 255);
-    analogWrite(COLOR_LED_PIN, colorLedValue * brightness / 255);
+// Interrupt handler for channel 2 (throttle)
+void ch2Change() {
+  if (digitalRead(RC_CH2_PIN) == HIGH) {
+    // Rising edge
+    ch2StartTime = micros();
+  } else {
+    // Falling edge
+    uint32_t pulseWidth = micros() - ch2StartTime;
+    
+    // Only update if within valid range (filter glitches)
+    if (pulseWidth >= 900 && pulseWidth <= 2100) {
+      ch2PulseWidth = pulseWidth;
+      lastValidRcSignalTime = millis();
+    }
+  }
 }
 
-// Normal mode sequence
-void normalSequence() {
-    // In normal mode, ON/OFF LED is on, others follow brightness
-    setLEDValues(255, brightness, brightness);
-    Serial.println("NORMAL_MODE_ACTIVE");
+// Interrupt handler for channel 3 (aux)
+void ch3Change() {
+  if (digitalRead(RC_CH3_PIN) == HIGH) {
+    // Rising edge
+    ch3StartTime = micros();
+  } else {
+    // Falling edge
+    uint32_t pulseWidth = micros() - ch3StartTime;
+    
+    // Only update if within valid range (filter glitches)
+    if (pulseWidth >= 900 && pulseWidth <= 2100) {
+      ch3PulseWidth = pulseWidth;
+      lastValidRcSignalTime = millis();
+    }
+  }
 }
 
-// PWM sequence for brightness demonstration
-void pwmSequence() {
-    static int pwmDirection = 5;
-    static int pwmValue = 0;
-    
-    // Update PWM value
-    pwmValue += pwmDirection;
-    
-    // Reverse direction at limits
-    if (pwmValue >= 255 || pwmValue <= 0) {
-        pwmDirection = -pwmDirection;
-        pwmValue = constrain(pwmValue, 0, 255);
-    }
-    
-    // Set LED values
-    setLEDValues(255, pwmValue, 0);
-    Serial.print("PWM_VALUE:");
-    Serial.println(pwmValue);
-}
+//===========================================
+// TASKS
+//===========================================
+Task taskUpdateLEDs(20, TASK_FOREVER, &updateLEDs);            // 50Hz update rate
+Task taskPrintDebug(1000, TASK_FOREVER, &printDebugInfo);      // Debug output once per second
+Task taskCheckSignal(100, TASK_FOREVER, &checkSignalStatus);   // Check signal validity 10 times per second
 
-// Color pattern sequence
-void colorSequence() {
-    static int colorState = 0;
-    static int rainbowHue = 0;
-    static bool strobeState = false;
-    
-    switch (currentColorPattern) {
-        case RED:
-            setLEDValues(0, 0, 255);
-            Serial.println("COLOR:RED");
-            break;
-            
-        case GREEN:
-            setLEDValues(0, 255, 0);
-            Serial.println("COLOR:GREEN");
-            break;
-            
-        case BLUE:
-            setLEDValues(255, 0, 0);
-            Serial.println("COLOR:BLUE");
-            break;
-            
-        case RAINBOW:
-            // Simple rainbow effect simulation
-            rainbowHue = (rainbowHue + 1) % 3;
-            switch (rainbowHue) {
-                case 0: setLEDValues(0, 0, 255); Serial.println("RAINBOW:RED"); break;
-                case 1: setLEDValues(0, 255, 0); Serial.println("RAINBOW:GREEN"); break;
-                case 2: setLEDValues(255, 0, 0); Serial.println("RAINBOW:BLUE"); break;
-            }
-            tColor.setInterval(colorDuration);
-            break;
-            
-        case STROBE:
-            // Strobe effect (on/off all LEDs)
-            if (strobeState) {
-                setLEDValues(255, 255, 255);
-                Serial.println("STROBE:ON");
-            } else {
-                setLEDValues(0, 0, 0);
-                Serial.println("STROBE:OFF");
-            }
-            strobeState = !strobeState;
-            tColor.setInterval(strobeDuration);
-            break;
-    }
-}
-
-// Set operating mode
-void setMode(Mode newMode) {
-    // Disable all mode tasks
-    tNormal.disable();
-    tPWM.disable();
-    tColor.disable();
-    
-    // Enable appropriate task based on new mode
-    switch (newMode) {
-        case NORMAL:
-            tNormal.enable();
-            Serial.println("MODE:NORMAL");
-            break;
-            
-        case PWM_MODE:
-            tPWM.enable();
-            Serial.println("MODE:PWM");
-            break;
-            
-        case COLOR_MODE:
-            tColor.enable();
-            Serial.println("MODE:COLOR");
-            break;
-            
-        case OFF:
-            setLEDValues(0, 0, 0);
-            Serial.println("MODE:OFF");
-            break;
-    }
-    
-    currentMode = newMode;
-}
-
-// Set color pattern
-void setColorPattern(ColorPattern newPattern) {
-    currentColorPattern = newPattern;
-    
-    // Reset interval when pattern changes
-    if (newPattern == RAINBOW) {
-        tColor.setInterval(colorDuration);
-    } else if (newPattern == STROBE) {
-        tColor.setInterval(strobeDuration);
-    } else {
-        tColor.setInterval(colorDuration);
-    }
-    
-    // Print pattern change
-    Serial.print("COLOR_PATTERN:");
-    switch (newPattern) {
-        case RED: Serial.println("RED"); break;
-        case GREEN: Serial.println("GREEN"); break;
-        case BLUE: Serial.println("BLUE"); break;
-        case RAINBOW: Serial.println("RAINBOW"); break;
-        case STROBE: Serial.println("STROBE"); break;
-    }
-}
-
-// Check button states and update modes
-void checkButtons() {
-    if (onOffButtonPressed) {
-        Serial.println("ON/OFF button pressed");
-        if (currentMode == OFF) {
-            setMode(NORMAL);
-        } else {
-            setMode(OFF);
-        }
-        onOffButtonPressed = false;
-    }
-    
-    if (modeButtonPressed) {
-        Serial.println("Mode button pressed");
-        // Cycle through modes
-        switch (currentMode) {
-            case NORMAL: setMode(PWM_MODE); break;
-            case PWM_MODE: setMode(COLOR_MODE); break;
-            case COLOR_MODE: setMode(NORMAL); break;
-            case OFF: setMode(NORMAL); break;
-        }
-        modeButtonPressed = false;
-    }
-    
-    if (colorButtonPressed) {
-        Serial.println("Color button pressed");
-        if (currentMode == COLOR_MODE) {
-            // Cycle through color patterns
-            switch (currentColorPattern) {
-                case RED: setColorPattern(GREEN); break;
-                case GREEN: setColorPattern(BLUE); break;
-                case BLUE: setColorPattern(RAINBOW); break;
-                case RAINBOW: setColorPattern(STROBE); break;
-                case STROBE: setColorPattern(RED); break;
-            }
-        }
-        colorButtonPressed = false;
-    }
-}
-
-// Read potentiometer and update brightness
-void readPotentiometer() {
-    int potValue = analogRead(POTENTIOMETER_PIN);
-    int newBrightness = map(potValue, 0, 1023, 0, 255);
-    
-    // Update only if there's a significant change (noise reduction)
-    if (abs(newBrightness - brightness) > 2) {
-        brightness = newBrightness;
-        Serial.print("BRIGHTNESS:");
-        Serial.println(brightness);
-    }
-}
-
-// Process serial commands
-void processSerial() {
-    if (Serial.available() > 0) {
-        String command = Serial.readStringUntil('\n');
-        command.trim();
-        int separatorPos = command.indexOf(':');
-        
-        if (separatorPos > 0) {
-            String param = command.substring(0, separatorPos);
-            String value = command.substring(separatorPos + 1);
-            
-            if (param == "MODE") {
-                if (value == "NORMAL") setMode(NORMAL);
-                else if (value == "PWM") setMode(PWM_MODE);
-                else if (value == "COLOR") setMode(COLOR_MODE);
-                else if (value == "OFF") setMode(OFF);
-            }
-            else if (param == "COLOR") {
-                if (value == "RED") setColorPattern(RED);
-                else if (value == "GREEN") setColorPattern(GREEN);
-                else if (value == "BLUE") setColorPattern(BLUE);
-                else if (value == "RAINBOW") setColorPattern(RAINBOW);
-                else if (value == "STROBE") setColorPattern(STROBE);
-            }
-            else if (param == "BRIGHTNESS") {
-                brightness = value.toInt();
-                Serial.print("BRIGHTNESS_SET:");
-                Serial.println(brightness);
-            }
-            else if (param == "COLOR_DURATION") {
-                colorDuration = value.toInt();
-                Serial.print("COLOR_DURATION_SET:");
-                Serial.println(colorDuration);
-            }
-            else if (param == "STROBE_DURATION") {
-                strobeDuration = value.toInt();
-                Serial.print("STROBE_DURATION_SET:");
-                Serial.println(strobeDuration);
-            }
-        }
-    }
-}
-
+//===========================================
+// SETUP FUNCTION
+//===========================================
 void setup() {
-    // Pin mode setup
-    pinMode(ONOFF_LED_PIN, OUTPUT);
-    pinMode(PWM_LED_PIN, OUTPUT);
-    pinMode(COLOR_LED_PIN, OUTPUT);
-    pinMode(BUTTON_ONOFF, INPUT_PULLUP);
-    pinMode(BUTTON_MODE, INPUT_PULLUP);
-    pinMode(BUTTON_COLOR, INPUT_PULLUP);
-    pinMode(POTENTIOMETER_PIN, INPUT);
-    
-    // Interrupt setup for buttons
-    attachInterrupt(digitalPinToInterrupt(BUTTON_ONOFF), onOffISR, FALLING);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_MODE), modeISR, FALLING);
-    
-    // PinChangeInterrupt for the third button (which might not be on a hardware interrupt pin)
-    attachPCINT(digitalPinToPCINT(BUTTON_COLOR), colorISR, FALLING);
-    
-    // Start serial communication
-    Serial.begin(SERIAL_BAUDRATE);
-    Serial.println("LED Control System Initialized");
-    
-    // Start in normal mode
-    setMode(NORMAL);
+  // Initialize serial for debugging
+  Serial.begin(115200);
+  Serial.println(F("Starting RC PWM Reader..."));
+  
+  // Initialize RC input pins
+  pinMode(RC_CH1_PIN, INPUT);
+  pinMode(RC_CH2_PIN, INPUT);
+  pinMode(RC_CH3_PIN, INPUT);
+  
+  // Initialize LED output pins
+  pinMode(ONOFF_LED_PIN, OUTPUT);
+  pinMode(BRIGHTNESS_LED_PIN, OUTPUT);
+  pinMode(RGB_RED_PIN, OUTPUT);
+  pinMode(RGB_GREEN_PIN, OUTPUT);
+  pinMode(RGB_BLUE_PIN, OUTPUT);
+  
+  // Set initial LED states
+  digitalWrite(ONOFF_LED_PIN, LOW);
+  analogWrite(BRIGHTNESS_LED_PIN, 0);
+  analogWrite(RGB_RED_PIN, 0);
+  analogWrite(RGB_GREEN_PIN, 0);
+  analogWrite(RGB_BLUE_PIN, 0);
+  
+  // Attach interrupts for RC PWM reading
+  // Hardware interrupts for most important channels
+  attachInterrupt(digitalPinToInterrupt(RC_CH1_PIN), ch1Change, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(RC_CH2_PIN), ch2Change, CHANGE);
+  
+  // Pin change interrupt for auxiliary channel
+  attachPCINT(digitalPinToPCINT(RC_CH3_PIN), ch3Change, CHANGE);
+  
+  // Initialize task scheduler
+  runner.init();
+  
+  // Add tasks to scheduler
+  runner.addTask(taskUpdateLEDs);
+  runner.addTask(taskPrintDebug);
+  runner.addTask(taskCheckSignal);
+  
+  // Enable tasks
+  taskUpdateLEDs.enable();
+  taskPrintDebug.enable();
+  taskCheckSignal.enable();
+  
+  Serial.println(F("RC LED Control System Initialized"));
+  Serial.println(F("Connect RC receiver channels as follows:"));
+  Serial.println(F("- Channel 1 (ON/OFF toggle) -> Arduino Pin 2"));
+  Serial.println(F("- Channel 2 (brightness)    -> Arduino Pin 3"));
+  Serial.println(F("- Channel 3 (color)         -> Arduino Pin 4"));
+  Serial.println(F("- RC receiver ground        -> Arduino GND"));
 }
 
+//===========================================
+// MAIN LOOP
+//===========================================
 void loop() {
-    runner.execute(); // Execute TaskScheduler
+  // Run the task scheduler
+  runner.execute();
+}
+
+//===========================================
+// TASK FUNCTIONS
+//===========================================
+// Task function to update LEDs based on RC input
+void updateLEDs() {
+  // Check if RC signal is valid
+  bool validRcSignal = (millis() - lastValidRcSignalTime < rcSignalTimeout);
+  
+  if (validRcSignal) {
+    // Process channel 1 for ON/OFF LED
+    // Toggle LED when stick is moved to one extreme
+    static bool prevAboveThreshold = false;
+    if (ch1PulseWidth > 1800) {
+      // Only toggle when the signal crosses the threshold (prevents multiple toggles)
+      if (!prevAboveThreshold) {
+        ledState = !ledState;
+        digitalWrite(ONOFF_LED_PIN, ledState ? HIGH : LOW);
+        Serial.print(F("LED toggled: "));
+        Serial.println(ledState ? F("ON") : F("OFF"));
+        prevAboveThreshold = true;
+      }
+    } else {
+      // Reset the toggle detection when signal goes below threshold
+      prevAboveThreshold = false;
+    }
+    
+    // Process channel 2 for brightness control
+    // Map 1000-2000μs to 0-255 brightness
+    ledBrightness = map(constrain(ch2PulseWidth, 1000, 2000), 1000, 2000, 0, 255);
+    analogWrite(BRIGHTNESS_LED_PIN, ledBrightness);
+    
+    // Process channel 3 for RGB LED color
+    // Map 1000-2000μs to 0-359 degrees in color wheel
+    rgbHue = map(constrain(ch3PulseWidth, 1000, 2000), 1000, 2000, 0, 359);
+    setRgbColorFromHue(rgbHue);
+  } else {
+    // Failsafe - set LEDs to a safe state
+    digitalWrite(ONOFF_LED_PIN, LOW);
+    analogWrite(BRIGHTNESS_LED_PIN, 0);
+    analogWrite(RGB_RED_PIN, 0);
+    analogWrite(RGB_GREEN_PIN, 0);
+    analogWrite(RGB_BLUE_PIN, 0);
+  }
+}
+
+// Task function to print debug information
+void printDebugInfo() {
+  Serial.print(F("CH1: "));
+  Serial.print(ch1PulseWidth);
+  Serial.print(F(" | CH2: "));
+  Serial.print(ch2PulseWidth);
+  Serial.print(F(" | CH3: "));
+  Serial.print(ch3PulseWidth);
+  Serial.print(F(" | Brightness: "));
+  Serial.print(ledBrightness);
+  Serial.print(F(" | Hue: "));
+  Serial.print(rgbHue);
+  Serial.print(F(" | Signal: "));
+  Serial.println((millis() - lastValidRcSignalTime < rcSignalTimeout) ? F("VALID") : F("LOST"));
+}
+
+// Task function to check signal status and provide feedback
+void checkSignalStatus() {
+  static bool lastSignalStatus = true;
+  bool currentSignalStatus = (millis() - lastValidRcSignalTime < rcSignalTimeout);
+  
+  // Only print message when status changes
+  if (currentSignalStatus != lastSignalStatus) {
+    if (currentSignalStatus) {
+      Serial.println(F("RC signal restored"));
+    } else {
+      Serial.println(F("RC signal lost - failsafe active"));
+    }
+    lastSignalStatus = currentSignalStatus;
+  }
+}
+
+// Function to set RGB LED color based on hue value (0-359 degrees)
+void setRgbColorFromHue(int hue) {
+  // Constrain hue to valid range
+  hue = constrain(hue, 0, 359);
+  
+  // Calculate RGB values from hue
+  int r, g, b;
+  
+  // Convert hue to RGB using the HSV color model (S=100%, V=100%)
+  int sector = hue / 60;
+  int remainder = hue % 60;
+  int c = 255;
+  int x = (c * (60 - remainder)) / 60;
+  int y = (c * remainder) / 60;
+  
+  switch (sector) {
+    case 0:  r = c; g = y; b = 0; break;
+    case 1:  r = x; g = c; b = 0; break;
+    case 2:  r = 0; g = c; b = y; break;
+    case 3:  r = 0; g = x; b = c; break;
+    case 4:  r = y; g = 0; b = c; break;
+    case 5:  r = c; g = 0; b = x; break;
+    default: r = 0; g = 0; b = 0; break;
+  }
+  
+  // Set RGB LED pins
+  analogWrite(RGB_RED_PIN, r);
+  analogWrite(RGB_GREEN_PIN, g);
+  analogWrite(RGB_BLUE_PIN, b);
 }
