@@ -6,7 +6,8 @@
 - CH3: RGB LED 색상 제어 (연속적인 색상 변화)
 - CH9: LED 전원 ON/OFF 제어
 
-## 동작 영상
+## 동작 영상 및 배선 설명
+[![동작 영상 및 배선 설명](https://img.youtube.com/vi/cSw97ibA4u8/maxresdefault.jpg)](https://www.youtube.com/watch?v=cSw97ibA4u8)
 
 ## 배선 정보
 
