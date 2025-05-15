@@ -1,4 +1,3 @@
-# PWM Decoding
 
 # 🎯 PWM Decoding - 202200867 변하연
 
