@@ -11,7 +11,9 @@
  #include <Arduino.h>                 // Arduino 기본 라이브러리
  #include <TaskScheduler.h>           // 스케줄링을 위한 라이브러리
  #include "PinChangeInterrupt.h"      // 추가 인터럽트 핀 지원을 위한 라이브러리
- 
+
+//AT9의 헬리콥터 모드 사용
+
  // 입력 핀 정의 - RC 수신기 연결
  #define RC_CH2_PIN 2    // 밝기 제어용 채널 (Arduino 디지털 핀 2에 연결)
  #define RC_CH3_PIN 3    // RGB 색상 제어용 채널 (Arduino 디지털 핀 3에 연결)
@@ -22,7 +24,7 @@
  #define BRIGHTNESS_LED_PIN 6    // 밝기 제어
  #define RGB_BLUE_PIN 7          // RGB LED 파란색
  #define RGB_GREEN_PIN 8         // RGB LED 초록색
- #define RGB_RED_PIN 9           // RGB LED 빨간색
+ #define RGB_RED_PIN 9           // RGB LED 빨간색  //여기까지 변하연, 아래로는 고광채 작성
  
  // RC 수신기 신호 관련 상수
  #define PULSE_CENTER 1500       // RC 신호 중앙값 (μs)
