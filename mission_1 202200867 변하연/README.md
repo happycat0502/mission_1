@@ -99,3 +99,7 @@ void loop() {
   - `PinChangeInterrupt.h`
 
 
+*라즈베리파이가 아닌 아두이노로 작동시켰기에 platformio에서 
+upload_port = /dev/ttyUSB0 해당 코드 주석처리 하였습니다.
+
+
