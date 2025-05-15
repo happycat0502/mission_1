@@ -9,7 +9,6 @@
 
 > 🔗 **시연 영상** : https://youtu.be/K3GcpnnoMX0?si=CwxZeCydMa4uAOfW
 
----
 
 
 
@@ -68,7 +67,7 @@ void loop() {
     runner.execute();  // TaskScheduler가 주기적으로 updateLEDs() 호출
 }
 
-
+```
 ## 🧠 구현 방식 요약
 
 - **인터럽트 기반 신호 측정**: 각 채널은 인터럽트를 통해 펄스폭 측정
@@ -78,7 +77,7 @@ void loop() {
 
 ---
 
-## ▶️ 실행 결과 (시연 영상 or 설명)
+## ▶️ 실행 결과 
 
 - RC 조종기를 조작하면 LED가 아래와 같이 반응합니다:
   1. **CH9 조작 시**: LED 전원이 켜졌다 꺼짐
@@ -86,7 +85,6 @@ void loop() {
   3. **CH3 조작 시**: LED 색상이 부드럽게 변화
 
 
----
 
 ---
 
